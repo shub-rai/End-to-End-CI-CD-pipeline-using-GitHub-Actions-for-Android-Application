@@ -2,10 +2,18 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: 
+      - main
+      - qa
+      - develop
   pull_request:
-    branches: [ "main" ]
+    branches: 
+      - main
+      - qa
 
+env:
+  AWS_DEFAULT_REGION: "us-east-1"
+  
 jobs:
   build:
 
