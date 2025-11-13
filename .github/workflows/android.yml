@@ -43,31 +43,45 @@ jobs:
       
     - name: Build with Gradle
       run: ./gradlew build
-      
-    # - name: Test with Gradle
-    #   run: ./gradlew jacocoTest
 
-    - name: Cache SonarQube packages
-      uses: actions/cache@v4
-      with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
+    # - name: Cache SonarQube packages
+    #   uses: actions/cache@v4
+    #   with:
+    #       path: ~/.sonar/cache
+    #       key: ${{ runner.os }}-sonar
+    #       restore-keys: ${{ runner.os }}-sonar
    
    
-    - name: Cache Gradle packages
-      uses: actions/cache@v4
-      with:
-          path: ~/.gradle/caches
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
-          restore-keys: ${{ runner.os }}-gradle
+    # - name: Cache Gradle packages
+    #   uses: actions/cache@v4
+    #   with:
+    #       path: ~/.gradle/caches
+    #       key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+    #       restore-keys: ${{ runner.os }}-gradle
           
-    - name: Code Scan Analysis - SonarQube
-      env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
+    # - name: Code Scan Analysis - SonarQube
+    #   env:
+    #       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    #       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    #   run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
       
     - name: Date and Time
       run: echo "::set-output name=current_date_time::$(date +"%d-%m-%Y-%H-%I-%M-%S")"
       id : date
+
+    - name: Copy APK files to a directory
+      run: |
+         mkdir -p apk-files/debug apk-files/release
+         
+         cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug.apk 
+         mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ steps.date.outputs.current_date_time }}.apk
+         
+         cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk
+         mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ steps.date.outputs.current_date_time }}.apk
+      
+    - name: Upload apk-files Directory
+      uses: actions/upload-artifact@v4
+      with:
+        name: apk-files-artifactory
+        path: ${{ github.workspace }}/apk-files/
+        if-no-files-found: ignore
