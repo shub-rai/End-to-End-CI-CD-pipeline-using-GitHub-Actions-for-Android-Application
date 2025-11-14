@@ -13,16 +13,43 @@ on:
 
 env:
   AWS_DEFAULT_REGION: "us-east-1"
-  
+  AWS_ROLE_TO_ASSUME: "GitHubActionsRole"
+  ACCOUNT_ID: "144947567090"
+  AWS_ROLE_ARN: "arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}"
+  SECURITY_GROUP_ID: "sg-030753c440fef9cd7"
+
+permissions:
+    id-token: write   # This is required for requesting the JWT
+    contents: read    # This is required for actions/checkout
+
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - name: Check IP
-      run: curl https://api.ipify.org
+    - name: Check IP and Save to Environment
+      id: check_ip # Give this step an ID
+      run: |
+        RUNNER_IP=$(curl -s https://api.ipify.org)
+        echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+        echo "Runner IP is $RUNNER_IP"
       
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ env.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+    - name: Add GitHub Runner IP to Security Group (Port 9000)
+      run: |
+        echo "Authorizing ingress on port 9000 for IP: ${{ env.RUNNER_IP }}"
+        aws ec2 authorize-security-group-ingress \
+          --group-id ${{ env.SECURITY_GROUP_ID }} \
+          --protocol tcp \
+          --port 9000 \
+          --cidr ${{ env.RUNNER_IP }}/32 \
+          --description "GitHub Actions Runner for SonarQube"
+    
     - uses: actions/checkout@v4
     
     - name: set up JDK 11
@@ -44,29 +71,28 @@ jobs:
     - name: Build with Gradle
       run: ./gradlew build
 
-    # - name: Cache SonarQube packages
-    #   uses: actions/cache@v4
-    #   with:
-    #       path: ~/.sonar/cache
-    #       key: ${{ runner.os }}-sonar
-    #       restore-keys: ${{ runner.os }}-sonar
+    - name: Cache SonarQube packages
+      uses: actions/cache@v4
+      with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
    
-   
-    # - name: Cache Gradle packages
-    #   uses: actions/cache@v4
-    #   with:
-    #       path: ~/.gradle/caches
-    #       key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
-    #       restore-keys: ${{ runner.os }}-gradle
+    - name: Cache Gradle packages
+      uses: actions/cache@v4
+      with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }} # Use wildcard for .gradle and .gradle.kts
+          restore-keys: ${{ runner.os }}-gradle
           
-    # - name: Code Scan Analysis - SonarQube
-    #   env:
-    #       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-    #       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-    #   run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
+    - name: Code Scan Analysis - SonarQube
+      env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
       
     - name: Date and Time
-      run: echo "::set-output name=current_date_time::$(date +"%d-%m-%Y-%H-%I-%M-%S")"
+      run: echo "current_date_time=$(date +"%d-%m-%Y-%H-%I-%M-%S")" >> $GITHUB_ENV
       id : date
 
     - name: Copy APK files to a directory
@@ -74,10 +100,10 @@ jobs:
          mkdir -p apk-files/debug apk-files/release
          
          cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug.apk 
-         mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ steps.date.outputs.current_date_time }}.apk
+         mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ env.current_date_time }}.apk
          
          cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk
-         mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ steps.date.outputs.current_date_time }}.apk
+         mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ env.current_date_time }}.apk
       
     - name: Upload apk-files Directory
       uses: actions/upload-artifact@v4
@@ -85,3 +111,13 @@ jobs:
         name: apk-files-artifactory
         path: ${{ github.workspace }}/apk-files/
         if-no-files-found: ignore
+
+    - name: Remove GitHub Runner IP from Security Group
+      if: always() # This step will run even if the build fails
+      run: |
+        echo "Revoking ingress on port 9000 for IP: ${{ env.RUNNER_IP }}"
+        aws ec2 revoke-security-group-ingress \
+          --group-id ${{ env.SECURITY_GROUP_ID }} \
+          --protocol tcp \
+          --port 9000 \
+          --cidr ${{ env.RUNNER_IP }}/32
