@@ -46,8 +46,7 @@ jobs:
           --group-id ${{ env.SECURITY_GROUP_ID }} \
           --protocol tcp \
           --port 9000 \
-          --cidr ${{ env.RUNNER_IP }}/32 \
-          --description "GitHub Actions Runner for SonarQube"
+          --cidr ${{ env.RUNNER_IP }}/32
     
     - uses: actions/checkout@v4
     
