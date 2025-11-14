@@ -15,7 +15,6 @@ env:
   AWS_DEFAULT_REGION: "us-east-1"
   AWS_ROLE_TO_ASSUME: "GitHubActionsRole"
   ACCOUNT_ID: "144947567090"
-  AWS_ROLE_ARN: "arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}"
   SECURITY_GROUP_ID: "sg-030753c440fef9cd7"
 
 permissions:
@@ -37,7 +36,7 @@ jobs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ env.AWS_ROLE_ARN }}
+        role-to-assume: "arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}"
         aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
     - name: Add GitHub Runner IP to Security Group (Port 9000)
