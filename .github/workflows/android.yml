@@ -17,44 +17,70 @@ env:
   ACCOUNT_ID: "144947567090"
   SECURITY_GROUP_ID: "sg-030753c440fef9cd7"
 
-permissions:
-    id-token: write   # This is required for requesting the JWT
-    contents: read    # This is required for actions/checkout
-
 jobs:
-  build:
+  #----------------------------------------------------
+  # Job 1: Setup Infrastructure
+  #----------------------------------------------------
+  # This job runs first. It gets the runner's IP, 
+  # assumes the AWS role, and adds the IP to the 
+  # security group so the build job can access SonarQube.
+  #----------------------------------------------------
+  setup:
+    name: Setup AWS Security Rules
     runs-on: ubuntu-latest
+    
+    permissions:
+      id-token: write # Required for OIDC role assumption
+
+    outputs:
+      runner_ip: ${{ steps.check_ip.outputs.runner_ip }}
 
     steps:
-    - name: Check IP and Save to Environment
-      id: check_ip # Give this step an ID
+    - name: Check IP and Set Output
+      id: check_ip
       run: |
         RUNNER_IP=$(curl -s https://api.ipify.org)
-        echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
         echo "Runner IP is $RUNNER_IP"
-      
+        # This line makes the IP available to the job's 'outputs'
+        echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: "arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}"
+        role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}
         aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
     - name: Add GitHub Runner IP to Security Group (Port 9000)
       run: |
-        echo "Authorizing ingress on port 9000 for IP: ${{ env.RUNNER_IP }}"
+        echo "Authorizing ingress on port 9000 for IP: ${{ steps.check_ip.outputs.runner_ip }}"
         aws ec2 authorize-security-group-ingress \
           --group-id ${{ env.SECURITY_GROUP_ID }} \
           --protocol tcp \
           --port 9000 \
-          --cidr ${{ env.RUNNER_IP }}/32
-    
+          --cidr ${{ steps.check_ip.outputs.runner_ip }}/32 \
+
+  #----------------------------------------------------
+  # Job 2: Build, Test, and Scan
+  #----------------------------------------------------
+  # This job runs *only after* the 'setup' job succeeds.
+  # It does not need AWS credentials.
+  #----------------------------------------------------
+  build:
+    name: Build, Test, and Scan
+    runs-on: ubuntu-latest
+    needs: setup # This job depends on the 'setup' job
+
+    permissions:
+      contents: read # Only needs to read code
+
+    steps:
     - uses: actions/checkout@v4
     
     - name: set up JDK 11
       uses: actions/setup-java@v4
       with:
         java-version: '11'
-        distribution: 'temurin'
+        distribution: 'zulu'
         cache: gradle
 
     - name: Grant execute permission for gradlew
@@ -80,7 +106,7 @@ jobs:
       uses: actions/cache@v4
       with:
           path: ~/.gradle/caches
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }} # Use wildcard for .gradle and .gradle.kts
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
           restore-keys: ${{ runner.os }}-gradle
           
     - name: Code Scan Analysis - SonarQube
@@ -90,32 +116,55 @@ jobs:
       run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
       
     - name: Date and Time
+      id: date # Give this step an ID
       run: echo "current_date_time=$(date +"%d-%m-%Y-%H-%I-%M-%S")" >> $GITHUB_ENV
-      id : date
 
-    - name: Copy APK files to a directory
-      run: |
-         mkdir -p apk-files/debug apk-files/release
+    # - name: Copy APK files to a directory
+    #   run: |
+    #      mkdir -p apk-files/debug apk-files/release
          
-         cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug.apk 
-         mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ env.current_date_time }}.apk
+    #      cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug.apk 
+    #      mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ env.current_date_time }}.apk
          
-         cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk
-         mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ env.current_date_time }}.apk
+    #      cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk
+    #      mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ env.current_date_time }}.apk
       
-    - name: Upload apk-files Directory
-      uses: actions/upload-artifact@v4
+    # - name: Upload apk-files Directory
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: apk-files-artifactory
+    #     path: ${{ github.workspace }}/apk-files/
+    #     if-no-files-found: ignore
+
+  #----------------------------------------------------
+  # Job 3: Teardown Infrastructure
+  #----------------------------------------------------
+  # This job runs *after* the 'build' job,
+  # regardless of whether 'build' succeeded or failed.
+  #----------------------------------------------------
+  teardown:
+    name: Teardown AWS Security Rules
+    runs-on: ubuntu-latest
+    needs: [setup, build] # Depends on setup (for the IP) and build (to run after)
+    if: always()
+
+    permissions:
+      id-token: write # Required for OIDC role assumption
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
       with:
-        name: apk-files-artifactory
-        path: ${{ github.workspace }}/apk-files/
-        if-no-files-found: ignore
+        role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ env.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
     - name: Remove GitHub Runner IP from Security Group
-      if: always() # This step will run even if the build fails
       run: |
-        echo "Revoking ingress on port 9000 for IP: ${{ env.RUNNER_IP }}"
+        RUNNER_IP=${{ needs.setup.outputs.runner_ip }}
+        echo "Revoking ingress on port 9000 for IP: $RUNNER_IP"
+        
         aws ec2 revoke-security-group-ingress \
           --group-id ${{ env.SECURITY_GROUP_ID }} \
           --protocol tcp \
           --port 9000 \
-          --cidr ${{ env.RUNNER_IP }}/32
+          --cidr $RUNNER_IP/32
