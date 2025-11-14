@@ -72,8 +72,19 @@ jobs:
 
     permissions:
       contents: read # Only needs to read code
+    
+    outputs:
+      runner_ip: ${{ steps.check_ip.outputs.runner_ip }}
 
     steps:
+    - name: Check IP and Set Output
+      id: check_ip
+      run: |
+        RUNNER_IP=$(curl -s https://api.ipify.org)
+        echo "Runner IP is $RUNNER_IP"
+        # This line makes the IP available to the job's 'outputs'
+        echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
+        
     - uses: actions/checkout@v4
     
     - name: set up JDK 11
